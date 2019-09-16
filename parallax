@@ -1,0 +1,77 @@
+#!/usr/bin/python
+
+from astropy.io import fits
+import numpy as np
+import os.path
+from argparse import ArgumentParser
+import sys
+sys.path.append("/home/steve/Downloads/analysis_scripts")
+import analysisUtils as au
+
+def main():
+    parser = ArgumentParser("parallax",description="splits the measurement set into east and west array for parrallax")
+    parser.add_argument("--inputMS",required=True,help="the name of the measurement set to be split")
+    parser.add_argument("--inputMetafits",required=True, help="the name of the metafits file")
+    parser.add_argument("--eastLimit",default=0,type=int, help="the boundary condition for east array")
+    parser.add_argument("--westLimit",default=0,type=int,help="the boundary condition for west array")
+    args=parser.parse_args()
+
+    baselines = np.asarray(au.getBaselineLengths(str(args.inputMS),sort=True))
+    numBaselines = len(baselines[:,1])
+    print("The number of baselines in ms " + str(numBaselines))
+
+    hdu = fits.open(str(args.inputMetafits))
+
+    position = []
+
+    for b in baselines:
+        currentBaseline = b[0]
+        tile1,tile2 = currentBaseline.split("-")
+        tile1Index = np.where(hdu[1].data['TileName']==tile1)
+        tile1pos = hdu[1].data['East'][tile1Index[0][0]]
+        tile2Index = np.where(hdu[1].data['TileName']==tile2)
+        tile2pos = hdu[1].data['East'][tile2Index[0][0]]
+        centerPoint = (float(tile1pos) + float(tile2pos)) /2.0
+        position.append(centerPoint)
+
+    position = np.asarray(position)
+    eastArrayIndex = np.where(position>args.eastLimit)
+    westArrayIndex = np.where(position<args.westLimit)
+
+    print("number of baselines in east array " + str(len(eastArrayIndex)))
+    print("number of baselines in west array " + str(len(westArrayIndex)))
+
+    eastBaselines = baselines[eastArrayIndex[0]]
+    westBaselines = baselines[westArrayIndex[0]]
+
+    config=""
+    counter = 0
+    for b in eastBaselines:
+        currentBaseline = b[0]
+        tile1, tile2 = currentBaseline.split("-")
+        config = str(config) + str(tile1) + "&" + str(tile2)
+        if counter < (len(eastArrayIndex[0])-1):
+            config = config + ";"
+        counter += 1
+    print("making east Array ms")
+    split(vis=str(args.inputMS),outputvis='EastArray.ms',antenna=config)
+
+
+    config=""
+    counter = 0
+    for b in westBaselines:
+        currentBaseline = b[0]
+        tile1, tile2 = currentBaseline.split("-")
+        config = str(config) + str(tile1) + "&" + str(tile2)
+        if counter < (len(westArrayIndex[0])-1):
+            config = config + ";"
+        counter += 1
+    print("making west Array ms")
+    split(vis=str(args.inputMS),outputvis='WestArray.ms',antenna=config)
+
+
+
+
+
+if __name__ == "__main__":
+    main()
