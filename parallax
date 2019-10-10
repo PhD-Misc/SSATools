@@ -1,5 +1,5 @@
 #!/usr/bin/python
-
+import math
 from astropy.io import fits
 import numpy as np
 import os.path
@@ -7,71 +7,220 @@ from argparse import ArgumentParser
 import sys
 sys.path.append("/home/steve/Downloads/analysis_scripts")
 import analysisUtils as au
+from astropy.table import Table
+from casacore.tables import table, taql
 
-def main():
-    parser = ArgumentParser("parallax",description="splits the measurement set into east and west array for parrallax")
-    parser.add_argument("--inputMS",required=True,help="the name of the measurement set to be split")
-    parser.add_argument("--inputMetafits",required=True, help="the name of the metafits file")
-    parser.add_argument("--eastLimit",default=0,type=int, help="the boundary condition for east array")
-    parser.add_argument("--westLimit",default=0,type=int,help="the boundary condition for west array")
-    args=parser.parse_args()
+inputMS = "1142425368.ms"
+inputMetafits = "1142425368.metafits"
+NoEast = 250
+NoWest = 250
+NoSouth = 250
+NoNorth = 250
+baselineCut = 500
 
-    baselines = np.asarray(au.getBaselineLengths(str(args.inputMS),sort=True))
-    numBaselines = len(baselines[:,1])
-    print("The number of baselines in ms " + str(numBaselines))
+## This section obtains all the flagged Tiles from the metafits file
+tbl = Table.read(inputMetafits)
+flags = np.array(tbl['Flag'], dtype=np.bool)
+FlaggedTiles = set(tbl['TileName'][flags])
+print("The flagged tiles are " + str(FlaggedTiles))
 
-    hdu = fits.open(str(args.inputMetafits))
+## obtain all baselines shorter than the cut and remove flagged baselines
+AllBaselines = np.asarray(au.getBaselineLengths(str(inputMS),sort=True))
+shortBaselines = []
+for b in AllBaselines:
+    Tile1, Tile2 = b[0].split("-")
+    if Tile1 in FlaggedTiles or Tile2 in FlaggedTiles:
+        continue
+    elif float(b[1]) > 0 and float(b[1]) <= baselineCut:
+        shortBaselines.append(np.asarray(b))
+print("There are a total of " + str() + " short and unflagged baselines") 
+    
+## The below sorts the baselines in E-W and N-S
+hdu = fits.open(inputMetafits)
+EWPosition=[]
+NSPosition=[]
+for b in shortBaselines:
+    Tile1, Tile2 = b[0].split("-")
+    Tile1Index = np.where(hdu[1].data["TileName"]==Tile1)
+    Tile2Index = np.where(hdu[1].data["TileName"]==Tile2)
+    Tile1posE = hdu[1].data["East"][Tile1Index[0][0]]
+    Tile1posN = hdu[1].data["North"][Tile1Index[0][0]]
+    Tile2posE = hdu[1].data["East"][Tile2Index[0][0]]
+    Tile2posN = hdu[1].data["North"][Tile2Index[0][0]]
+    centerPointE = (float(Tile1posE)+float(Tile2posE))/2.0
+    centerPointN = (float(Tile1posN)+float(Tile2posN))/2.0
+    EWPosition.append(centerPointE)
+    NSPosition.append(centerPointN)
 
-    position = []
+## The below makes the config for East, West, North and South Array
+eastArray = []
+westArray = []
+northArray = []
+southArray = []
+filename = str(inputMS) +  "/ANTENNA/"
 
-    for b in baselines:
-        currentBaseline = b[0]
-        tile1,tile2 = currentBaseline.split("-")
-        tile1Index = np.where(hdu[1].data['TileName']==tile1)
-        tile1pos = hdu[1].data['East'][tile1Index[0][0]]
-        tile2Index = np.where(hdu[1].data['TileName']==tile2)
-        tile2pos = hdu[1].data['East'][tile2Index[0][0]]
-        centerPoint = (float(tile1pos) + float(tile2pos)) /2.0
-        position.append(centerPoint)
+ms = table(filename)
 
-    position = np.asarray(position)
-    eastArrayIndex = np.where(position>args.eastLimit)
-    westArrayIndex = np.where(position<args.westLimit)
+EWtemp = np.asarray(EWPosition)
+xArray = []
+yArray = []
+zArray = []
+for i in range(NoEast):
+    index = np.where(EWtemp == max(EWtemp))
+    eastArray.append(shortBaselines[int(index[0])])
+    EWtemp[index] = -10000
+    tile1, tile2 = shortBaselines[int(index[0])][0].split("-")
+    temp = taql("select POSITION from $ms where NAME=$tile1")
+    x1,y1,z1 = temp.getcol("POSITION")[0]
+    temp = taql("select POSITION from $ms where NAME=$tile2")
+    x2,y2,z2 = temp.getcol("POSITION")[0]
+    xArray.append((x1+x2)/2.0)
+    yArray.append((y1+y2)/2.0)
+    zArray.append((z1+z2)/2.0)
+x = np.mean(xArray)
+y = np.mean(yArray)
+z = np.mean(zArray)
+lon = atan2(y,x)*180.0/np.pi
+lat = atan2(z,np.sqrt(x**2.0+y**2.0))*180/np.pi
+r = np.sqrt(x**2.0+y**2.0+z**2.0)
+elv = r - 6374225.392016013
+print("The position fo East Array is lat=" + str(lat) + ", lon=" + str(lon) + " and elv=" + str(elv))
+print("x,y,z " + str(x) + " " + str(y) +" "+ str(z))
 
-    print("number of baselines in east array " + str(len(eastArrayIndex)))
-    print("number of baselines in west array " + str(len(westArrayIndex)))
+EWtemp = np.asarray(EWPosition)
+xArray = []
+yArray = []
+zArray = []
+for i  in range(NoWest):
+    index = np.where(EWtemp == min(EWtemp))
+    westArray.append(shortBaselines[int(index[0])])
+    EWtemp[index] = 10000
+    tile1, tile2 = shortBaselines[int(index[0])][0].split("-")
+    temp = taql("select POSITION from $ms where NAME=$tile1")
+    x1,y1,z1 = temp.getcol("POSITION")[0]
+    temp = taql("select POSITION from $ms where NAME=$tile2")
+    x2,y2,z2 = temp.getcol("POSITION")[0]
+    xArray.append((x1+x2)/2.0)
+    yArray.append((y1+y2)/2.0)
+    zArray.append((z1+z2)/2.0)
+x = np.mean(xArray)
+y = np.mean(yArray)
+z = np.mean(zArray)
+lon = atan2(y,x)*180.0/np.pi
+lat = atan2(z,np.sqrt(x**2.0+y**2.0))*180/np.pi
+r = np.sqrt(x**2.0+y**2.0+z**2.0)
+elv = r - 6374225.392016013
+print("The position fo West Array is lat=" + str(lat) + ", lon=" + str(lon) + " and elv=" + str(elv))
+print("x,y,z " + str(x) +" "+ str(y) +" "+ str(z))
 
-    eastBaselines = baselines[eastArrayIndex[0]]
-    westBaselines = baselines[westArrayIndex[0]]
-
-    config=""
-    counter = 0
-    for b in eastBaselines:
-        currentBaseline = b[0]
-        tile1, tile2 = currentBaseline.split("-")
-        config = str(config) + str(tile1) + "&" + str(tile2)
-        if counter < (len(eastArrayIndex[0])-1):
-            config = config + ";"
-        counter += 1
-    print("making east Array ms")
-    split(vis=str(args.inputMS),outputvis='EastArray.ms',antenna=config)
-
-
-    config=""
-    counter = 0
-    for b in westBaselines:
-        currentBaseline = b[0]
-        tile1, tile2 = currentBaseline.split("-")
-        config = str(config) + str(tile1) + "&" + str(tile2)
-        if counter < (len(westArrayIndex[0])-1):
-            config = config + ";"
-        counter += 1
-    print("making west Array ms")
-    split(vis=str(args.inputMS),outputvis='WestArray.ms',antenna=config)
+NStemp = np.asarray(NSPosition)
+xArray = []
+yArray = []
+zArray = []
+for i in range(NoNorth):
+    index = np.where(NStemp == max(NStemp))
+    northArray.append(shortBaselines[int(index[0])])
+    NStemp[index] = -10000
+    tile1, tile2 = shortBaselines[int(index[0])][0].split("-")
+    temp = taql("select POSITION from $ms where NAME=$tile1")
+    x1,y1,z1 = temp.getcol("POSITION")[0]
+    temp = taql("select POSITION from $ms where NAME=$tile2")
+    x2,y2,z2 = temp.getcol("POSITION")[0]
+    xArray.append((x1+x2)/2.0)
+    yArray.append((y1+y2)/2.0)
+    zArray.append((z1+z2)/2.0)
+x = np.mean(xArray)
+y = np.mean(yArray)
+z = np.mean(zArray)
+lon = atan2(y,x)*180.0/np.pi
+lat = atan2(z,np.sqrt(x**2.0+y**2.0))*180/np.pi
+r = np.sqrt(x**2.0+y**2.0+z**2.0)
+elv = r - 6374225.392016013
+print("The position fo North Array is lat=" + str(lat) + ", lon=" + str(lon) + " and elv=" + str(elv))
+print("x,y,z " + str(x) +" " +str(y) +" "+ str(z))
 
 
+NStemp = np.asarray(NSPosition)
+xArray = []
+yArray = []
+zArray = []
+for i in range(NoSouth):
+    index = np.where(NStemp == min(NStemp))
+    southArray.append(shortBaselines[int(index[0])])
+    NStemp[index] = 10000
+    tile1, tile2 = shortBaselines[int(index[0])][0].split("-")
+    temp = taql("select POSITION from $ms where NAME=$tile1")
+    x1,y1,z1 = temp.getcol("POSITION")[0]
+    temp = taql("select POSITION from $ms where NAME=$tile2")
+    x2,y2,z2 = temp.getcol("POSITION")[0]
+    xArray.append((x1+x2)/2.0)
+    yArray.append((y1+y2)/2.0)
+    zArray.append((z1+z2)/2.0)
+x = np.mean(xArray)
+y = np.mean(yArray)
+z = np.mean(zArray)
+lon = atan2(y,x)*180.0/np.pi
+lat = atan2(z,np.sqrt(x**2.0+y**2.0))*180/np.pi
+r = np.sqrt(x**2.0+y**2.0+z**2.0)
+elv = r - 6374225.392016013
+print("The position fo South Array is lat=" + str(lat) + ", lon=" + str(lon) + " and elv=" + str(elv))
+print("x,y,z " + str(x) +" "+ str(y) +" "+ str(z))
+        
+
+## the below makes the config file for the east west north and south array
+eastconfig = ""
+westconfig = ""
+northconfig = ""
+southconfig = ""
+
+counter = 0
+for b in eastArray:
+    tile1, tile2 = b[0].split("-")
+    eastconfig = str(eastconfig) + str(tile1) + "&" + str(tile2)
+    if counter < (NoEast-1):
+        eastconfig = eastconfig + ";"
+    counter += 1
+
+counter = 0
+for b in westArray:
+    tile1, tile2 = b[0].split("-")
+    westconfig = str(westconfig) + str(tile1) + "&" + str(tile2)
+    if counter < (NoWest-1):
+        westconfig = westconfig + ";"
+    counter += 1
+
+counter = 0
+for b in northArray:
+    tile1, tile2 = b[0].split("-")
+    northconfig = str(northconfig) + str(tile1) + "&" + str(tile2)
+    if counter < (NoNorth-1):
+        northconfig = northconfig + ";"
+    counter += 1
+
+counter = 0
+for b in southArray:
+    tile1, tile2 = b[0].split("-")
+    southconfig = str(southconfig) + str(tile1) + "&" + str(tile2)
+    if counter < (NoSouth-1):
+        southconfig = southconfig + ";"
+    counter += 1
+print("The config for east arrray is ")
+print(eastconfig)
+print("The config for west arrray is ")
+print(westconfig)
+print("The config for north arrray is ")
+print(northconfig)
+print("The config for south arrray is ")
+print(southconfig)
+
+#print("making east ms")
+#split(vis="1244056224.ms",datacolumn='corrected',outputvis='eastArray.ms',antenna=str(eastconfig))
+#print("making west ms")
+#split(vis=inputMS,datacolumn='corrected',outputvis='westArray.ms',antenna=str(westconfig))
+#print("making north ms")
+#split(vis=inputMS,datacolumn='corrected',outputvis='northArray.ms',antenna=str(northconfig))
+#print("making south ms")
+#split(vis=inputMS,datacolumn='corrected',outputvis='southArray.ms',antenna=str(southconfig))
 
 
 
-if __name__ == "__main__":
-    main()
