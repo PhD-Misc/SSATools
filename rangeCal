@@ -1,0 +1,97 @@
+#!/usr/bin/python
+from __future__ import division
+from astropy.io import fits
+import numpy as np
+from astropy.wcs import WCS
+import os.path
+from argparse import ArgumentParser
+import matplotlib.pyplot as plt
+from astropy.nddata.utils import Cutout2D
+import math
+from uncertainties import ufloat
+from uncertainties.umath import *
+
+def getRADEC(data,wcs):
+    rfi = np.max(data)
+    Points1 = np.asarray(np.where(data==rfi))
+    pixcrd = np.array((Points1[1,:], Points1[0,:]),dtype=np.float64).T
+    world = wcs.wcs_pix2world(pixcrd,0)
+    ra, dec = world[0,0], world[0,1]
+    return [ra*np.pi/180.0, dec*np.pi/180.0]
+
+
+def main():
+    parser = ArgumentParser("rangeCal", description="calculates the range to the rfi")
+    parser.add_argument('--img1',required=True, help="The name of the first image")
+    parser.add_argument("--img2",required=True, help="The name of the second image")
+    parser.add_argument("--x1",type=float,required=True, help="x1")
+    parser.add_argument("--x2",type=float,required=True, help="x2")
+    parser.add_argument("--y1",type=float,required=True, help="y1")
+    parser.add_argument("--y2",type=float,required=True, help="y2")
+    parser.add_argument("--z1",type=float,required=True, help="z1")
+    parser.add_argument("--z2",type=float,required=True, help="z2")
+    args = parser.parse_args()
+
+    x1 = args.x1
+    x2 = args.x2
+    y1 = args.y1
+    y2 = args.y2
+    z1 = args.z1
+    z2 = args.z2
+
+    hdu1 = fits.open(args.img1)
+    wcs1 = WCS(hdu1[0].header, naxis=2)
+    data = hdu1[0].data[0,0,:,:]
+    plt.imshow(data,origin="lower")
+    print("showing full image")
+    plt.show(block=False)
+    maskx = input("mask x: ")
+    masky = input("mask y: ")
+    masksize = input("mask size: ")
+    plt.clf()
+    cutout1 = Cutout2D(data, [int(maskx), int(masky)], [int(masksize), int(masksize)], wcs=wcs1)
+    print("showing masked data")
+    plt.imshow(cutout1.data,origin="lower")
+    plt.show()
+
+    hdu2 = fits.open(args.img2)
+    wcs2 = WCS(hdu2[0].header, naxis=2)
+    data = hdu2[0].data[0,0,:,:]
+    plt.imshow(data,origin="lower")
+    print("showing full image")
+    plt.show(block=False)
+    maskx = input("mask x: ")
+    masky = input("mask y: ")
+    masksize = input("mask size: ")
+    plt.clf()
+    cutout2 = Cutout2D(data, [int(maskx), int(masky)], [int(masksize), int(masksize)], wcs=wcs1)
+    print("showing masked data")
+    plt.imshow(cutout2.data,origin="lower")
+    plt.show()
+
+
+    ##real magic starts here
+    ra1, dec1 = getRADEC(cutout1.data,cutout1.wcs)
+    ra1 = ufloat(ra1,0.000349066)
+    dec1 = ufloat(dec1,0.000349066)
+
+    ra2, dec2 = getRADEC(cutout2.data,cutout2.wcs)
+    ra2 = ufloat(ra2,0.000349066)
+    dec2 = ufloat(dec2,0.000349066)
+    psi = acos(sin(dec1)*sin(dec2)+cos(dec1)*cos(dec2)*cos(ra1-ra2))
+    d = sqrt((x1-x2)**2.0+(y1-y2)**2.0+(z1-z2)**2.0)
+    x12 = (x2 - x1)
+    y12 = (y2 - y1)
+    z12 = (z2 - z1)
+    ra12 = atan2(y12,x12)
+    dec12 = asin(z12/d)
+    rho1 = acos(sin(dec1)*sin(dec12) + cos(dec1)*cos(dec12)*cos(ra1-ra12))
+    rho2 = np.pi - psi - rho1
+    RE = d*sin(rho2)/sin(psi)
+    RW = d*sin(rho1)/sin(psi)
+    print("The parallax baseline is " + str(d) + " m")
+    print("RE is " + str(RE/1000) + " km and RW is " + str(RW/1000) + " km")
+
+
+if __name__ == "__main__":
+    main()

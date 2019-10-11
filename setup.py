@@ -7,7 +7,7 @@ with open("README.md","r") as fh:
 setuptools.setup(
         name="SSATools",
         version='0.1',        
-        scripts=['parallax'],
+        scripts=['parallax','rangeCal'],
         author="Steve Prabu",
         description="custom tools",
         packages=setuptools.find_packages(),
